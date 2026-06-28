@@ -1,107 +1,126 @@
 """
-Fetches dividend data for a given stock symbol using yfinance.
-Supports NSE (.NS), BSE (.BO), and global exchanges.
+Core dividend service.
+Combines yfinance (price / yield), NSE (ex-date / record-date / amount),
+and Screener.in links into a single enriched result.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as date_type
+
 import yfinance as yf
+
+from app.services.nse_service import get_nse_dividend_detail
+from app.services.screener_service import (
+    get_screener_url,
+    get_stockedge_url,
+    get_screener_dividend_history,
+)
 
 logger = logging.getLogger(__name__)
 
-# Suffix → exchange label
-EXCHANGE_SUFFIXES = {
-    ".NS": "NSE",
-    ".BO": "BSE",
-}
-
-# Candidate suffixes tried in order when user gives a bare symbol (e.g. "ITC")
-INDIAN_SUFFIXES = [".NS", ".BO"]
+EXCHANGE_SUFFIXES = {".NS": "NSE", ".BO": "BSE"}
+INDIAN_SUFFIXES   = [".NS", ".BO"]
 
 
-def _fetch(symbol: str) -> dict | None:
-    """
-    Try to fetch a valid ticker for `symbol`.
-    Returns the info dict on success, None if no market data found.
-    """
-    logger.debug("Trying ticker: %s", symbol)
-    ticker = yf.Ticker(symbol)
-    info = ticker.info or {}
-    price = info.get("regularMarketPrice") or info.get("currentPrice")
-    if price:
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _yf_fetch(symbol: str) -> dict | None:
+    logger.debug("yfinance fetch: %s", symbol)
+    try:
+        info = yf.Ticker(symbol).info or {}
+    except Exception as e:
+        logger.warning("yfinance error for %s: %s", symbol, e)
+        return None
+    if info.get("regularMarketPrice") or info.get("currentPrice"):
         return info
     return None
 
 
-def get_dividend_info(symbol: str) -> dict:
+def _fmt_date(d: date_type) -> str:
+    return d.strftime("%d %b %Y")
+
+
+# ── main API ─────────────────────────────────────────────────────────────────
+
+def get_dividend_info(symbol: str, shares: int | None = None) -> dict:
     """
-    Return a dict with dividend details for the given ticker symbol.
-
-    Resolution order:
-      1. Symbol as-is (handles AAPL, ITC.NS, ITC.BO, etc.)
-      2. Symbol + .NS  (NSE)
-      3. Symbol + .BO  (BSE)
-
-    Raises ValueError if no data is found on any exchange.
+    Resolve symbol → fetch yfinance + NSE + Screener and return enriched dict.
+    Raises ValueError if the stock cannot be found on any source.
     """
     symbol = symbol.upper().strip()
-    logger.info("Resolving symbol: %s", symbol)
+    logger.info("get_dividend_info: symbol=%s shares=%s", symbol, shares)
 
-    # Build candidate list
-    candidates: list[str] = [symbol]
+    # 1. Resolve ticker via yfinance
+    candidates = [symbol]
     if not any(symbol.endswith(s) for s in EXCHANGE_SUFFIXES):
-        # Bare symbol — try Indian exchanges before giving up
         candidates += [symbol + s for s in INDIAN_SUFFIXES]
 
-    info = None
-    resolved = symbol
+    yf_info   = None
+    resolved  = symbol
     for candidate in candidates:
-        info = _fetch(candidate)
-        if info:
+        yf_info = _yf_fetch(candidate)
+        if yf_info:
             resolved = candidate
-            logger.info("Resolved %s → %s", symbol, resolved)
             break
 
-    if not info:
+    if not yf_info:
         raise ValueError(
             f"No data found for '{symbol}'. "
             "Try adding the exchange suffix: ITC.NS (NSE) or ITC.BO (BSE)."
         )
 
-    # Determine exchange label
-    suffix = next((s for s in EXCHANGE_SUFFIXES if resolved.endswith(s)), None)
-    exchange_label = EXCHANGE_SUFFIXES.get(suffix) if suffix else (
-        info.get("exchange") or "Global"
-    )
+    suffix         = next((s for s in EXCHANGE_SUFFIXES if resolved.endswith(s)), None)
+    exchange_label = EXCHANGE_SUFFIXES.get(suffix) or yf_info.get("exchange") or "Global"
+    is_indian      = suffix in (".NS", ".BO") or exchange_label in ("NSE", "BSE")
 
-    dividend_rate = info.get("dividendRate") or 0
-    payout_ratio  = info.get("payoutRatio") or 0
-    company_name  = info.get("shortName") or resolved
-    currency      = info.get("currency") or "INR"
-    price         = info.get("regularMarketPrice") or info.get("currentPrice") or 0
-    sector        = info.get("sector") or "N/A"
+    company_name = yf_info.get("shortName") or resolved
+    currency     = yf_info.get("currency") or ("INR" if is_indian else "USD")
+    price        = yf_info.get("regularMarketPrice") or yf_info.get("currentPrice") or 0
+    sector       = yf_info.get("sector") or "N/A"
+    payout_ratio = yf_info.get("payoutRatio") or 0
 
-    # Convert Unix timestamp → readable date string
-    ex_date_raw = info.get("exDividendDate")
-    if ex_date_raw:
+    # yfinance dividend rate (annual)
+    yf_rate = yf_info.get("dividendRate") or 0
+
+    # Ex-date from yfinance (unix timestamp → string)
+    yf_ex_date = None
+    raw_ts = yf_info.get("exDividendDate")
+    if raw_ts:
         try:
-            ex_date = datetime.fromtimestamp(int(ex_date_raw), tz=timezone.utc).strftime("%d %b %Y")
+            yf_ex_date = datetime.fromtimestamp(int(raw_ts), tz=timezone.utc).strftime("%d %b %Y")
         except Exception:
-            ex_date = str(ex_date_raw)
-    else:
-        ex_date = None
+            yf_ex_date = str(raw_ts)
 
-    # Calculate yield from rate/price to avoid yfinance returning
-    # inconsistent formats (decimal vs whole-number %) for Indian stocks
-    if dividend_rate and price:
-        dividend_yield = (dividend_rate / price) * 100  # always a true percentage
+    # 2. Enrich from NSE for Indian stocks
+    nse = None
+    if is_indian:
+        nse = get_nse_dividend_detail(resolved)
+
+    # Prefer NSE data; fall back to yfinance
+    if nse:
+        ex_date = _fmt_date(nse["ex_date"]) if isinstance(nse.get("ex_date"), date_type) else yf_ex_date
+        record_date = _fmt_date(nse["record_date"]) if isinstance(nse.get("record_date"), date_type) else None
+        dividend_amount = nse.get("amount") or yf_rate
     else:
-        raw_yield = info.get("dividendYield") or 0
-        # yfinance may return 0.0552 (decimal) or 5.52 (already %) — normalise
+        ex_date         = yf_ex_date
+        record_date     = None
+        dividend_amount = yf_rate
+
+    # 3. Dividend yield — calculate from amount/price to avoid yfinance inconsistency
+    if dividend_amount and price:
+        dividend_yield = (dividend_amount / price) * 100
+    else:
+        raw_yield = yf_info.get("dividendYield") or 0
         dividend_yield = raw_yield if raw_yield > 1 else raw_yield * 100
 
+    # 4. Screener dividend history (optional enrichment)
+    screener_history = get_screener_dividend_history(resolved) if is_indian else []
+
+    # 5. Estimated payout
+    estimated_payout = round(dividend_amount * shares, 2) if (dividend_amount and shares) else None
+
     logger.info(
-        "%s | rate=%.2f yield=%.2f%% ex_date=%s exchange=%s",
-        resolved, dividend_rate, dividend_yield, ex_date, exchange_label,
+        "%s | amount=%s yield=%.2f%% ex=%s record=%s exchange=%s",
+        resolved, dividend_amount, dividend_yield, ex_date, record_date, exchange_label,
     )
 
     return {
@@ -111,33 +130,57 @@ def get_dividend_info(symbol: str) -> dict:
         "currency":         currency,
         "price":            price,
         "sector":           sector,
-        "dividend_rate":    dividend_rate,
-        "dividend_yield":   dividend_yield,   # always a true % value now
-        "ex_dividend_date": ex_date,          # always a string or None
+        "dividend_amount":  dividend_amount,
+        "dividend_yield":   dividend_yield,
+        "ex_dividend_date": ex_date,
+        "record_date":      record_date,
         "payout_ratio":     payout_ratio,
+        "screener_history": screener_history,
+        "estimated_payout": estimated_payout,
+        "shares":           shares,
+        "screener_url":     get_screener_url(resolved),
+        "stockedge_url":    get_stockedge_url(resolved),
     }
 
 
 def format_dividend_message(data: dict) -> str:
-    """Format the dividend info dict into a readable Telegram message."""
-    yield_pct = f"{data['dividend_yield']:.2f}%" if data["dividend_yield"] else "N/A"
-    payout    = f"{data['payout_ratio'] * 100:.1f}%" if data["payout_ratio"]  else "N/A"
-    ex_date   = str(data["ex_dividend_date"])        if data["ex_dividend_date"] else "N/A"
-    rate      = (
-        f"{data['currency']} {data['dividend_rate']:.2f} / year"
-        if data["dividend_rate"] else "N/A"
-    )
-    price = (
-        f"{data['currency']} {data['price']:.2f}"
-        if data["price"] else "N/A"
-    )
+    curr    = "₹" if data["currency"] == "INR" else f"{data['currency']} "
+    amount  = f"{curr}{data['dividend_amount']:.2f}/share" if data["dividend_amount"] else "N/A"
+    yield_s = f"{data['dividend_yield']:.2f}%" if data["dividend_yield"] else "N/A"
+    ex_date = data["ex_dividend_date"] or "N/A"
+    rec     = data["record_date"] or "N/A"
+    payout  = f"{data['payout_ratio'] * 100:.1f}%" if data["payout_ratio"] else "N/A"
+    price_s = f"{curr}{data['price']:.2f}" if data["price"] else "N/A"
 
-    return (
-        f"📊 *{data['company']} ({data['symbol']})*\n"
-        f"🏛 Exchange: {data['exchange']}  |  🏭 {data['sector']}\n\n"
-        f"💰 Dividend Rate:    {rate}\n"
-        f"📈 Dividend Yield:   {yield_pct}\n"
-        f"📅 Ex-Dividend Date: {ex_date}\n"
-        f"💼 Payout Ratio:     {payout}\n"
-        f"🏷 Current Price:    {price}"
-    )
+    lines = [
+        f"📊 *{data['company']}* (`{data['symbol']}`)",
+        f"🏛 {data['exchange']}  |  🏭 {data['sector']}",
+        "",
+        f"💰 Dividend Amount:   {amount}",
+        f"📈 Dividend Yield:    {yield_s}",
+        f"📅 Ex-Dividend Date:  {ex_date}",
+        f"📋 Record Date:       {rec}",
+        f"💼 Payout Ratio:      {payout}",
+        f"🏷 Current Price:     {price_s}",
+    ]
+
+    # Estimated payout block
+    if data.get("estimated_payout") is not None:
+        lines += [
+            "",
+            f"📦 *If you own {data['shares']:,} shares:*",
+            f"   Expected Dividend = {curr}{data['estimated_payout']:,.2f}",
+        ]
+
+    # Screener history (last 3 dividends)
+    if data.get("screener_history"):
+        lines.append("\n📜 *Recent Dividend History* (Screener.in):")
+        for row in data["screener_history"][:3]:
+            lines.append(f"   • {row['date']}: {curr}{row['amount']}")
+
+    lines += [
+        "",
+        f"[🔍 Screener]({data['screener_url']})  |  [📊 StockEdge]({data['stockedge_url']})",
+    ]
+
+    return "\n".join(lines)

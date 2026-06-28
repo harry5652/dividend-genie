@@ -1,43 +1,45 @@
 import logging
+from datetime import datetime
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.services.dividend_service import get_dividend_info, format_dividend_message
+from app.services.nse_service import get_upcoming_corporate_actions
 
 logger = logging.getLogger(__name__)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
-    logger.info("User %s triggered /start", user)
+    logger.info("/start from %s", user)
     await update.message.reply_text(
         f"👋 Welcome to Dividend Genie, {user}!\n\n"
-        "Your AI assistant for dividends across NSE, BSE, and global markets.\n\n"
-        "Examples:\n"
-        "  /dividend ITC       — auto-detect (NSE/BSE)\n"
-        "  /dividend ITC.NS    — NSE explicitly\n"
-        "  /dividend ITC.BO    — BSE explicitly\n"
-        "  /dividend AAPL      — US stocks\n\n"
-        "Type /help for all commands."
+        "Your assistant for NSE, BSE & global dividend stocks.\n\n"
+        "Commands:\n"
+        "  /dividend ITC — dividend info\n"
+        "  /dividend ITC 100 — payout for 100 shares\n"
+        "  /upcoming — dividends due in 30 days\n"
+        "  /help — full guide"
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info("User triggered /help")
+    logger.info("/help requested")
     await update.message.reply_text(
         "📖 *Available Commands*\n\n"
-        "/start — Welcome message\n"
-        "/help — Show this help\n"
-        "/dividend <symbol> — Get dividend info\n\n"
+        "/dividend `<symbol>` — Full dividend info\n"
+        "/dividend `<symbol>` `<shares>` — With estimated payout\n"
+        "/upcoming — Upcoming dividends in next 30 days\n\n"
         "*Exchange suffixes:*\n"
-        "  `.NS` → NSE (e.g. ITC.NS)\n"
-        "  `.BO` → BSE (e.g. ITC.BO)\n"
-        "  No suffix → auto-detect (tries NSE then BSE)\n\n"
+        "  `.NS` → NSE    `.BO` → BSE\n"
+        "  No suffix → auto\\-detect (tries NSE then BSE)\n\n"
         "*Examples:*\n"
-        "  /dividend ITC\n"
-        "  /dividend RELIANCE.NS\n"
-        "  /dividend HDFCBANK.BO\n"
-        "  /dividend AAPL",
+        "  `/dividend ITC`\n"
+        "  `/dividend ITC 500`\n"
+        "  `/dividend RELIANCE.NS 100`\n"
+        "  `/dividend HDFCBANK.BO`\n"
+        "  `/dividend AAPL`",
         parse_mode="Markdown",
     )
 
@@ -45,30 +47,115 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def dividend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "Usage: /dividend <symbol>\n\n"
-            "Examples:\n"
-            "  /dividend ITC         (auto NSE/BSE)\n"
-            "  /dividend RELIANCE.NS (NSE)\n"
-            "  /dividend HDFCBANK.BO (BSE)\n"
-            "  /dividend AAPL        (US)"
+            "Usage:\n"
+            "  /dividend ITC\n"
+            "  /dividend ITC 100   ← add shares for payout estimate"
         )
         return
 
     symbol = context.args[0].upper()
-    logger.info("Dividend requested for: %s", symbol)
+    shares = None
 
-    wait_msg = await update.message.reply_text(f"🔍 Looking up *{symbol}*...", parse_mode="Markdown")
+    if len(context.args) >= 2:
+        try:
+            shares = int(context.args[1].replace(",", ""))
+            if shares <= 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("⚠️ Shares must be a positive number. E.g. /dividend ITC 100")
+            return
+
+    logger.info("Dividend lookup: symbol=%s shares=%s", symbol, shares)
+    wait_msg = await update.message.reply_text(
+        f"🔍 Looking up *{symbol}*...", parse_mode="Markdown"
+    )
 
     try:
-        data = get_dividend_info(symbol)
-        message = format_dividend_message(data)
-        await wait_msg.edit_text(message, parse_mode="Markdown")
-        logger.info("Returned dividend data for %s", symbol)
+        data = get_dividend_info(symbol, shares=shares)
+        msg  = format_dividend_message(data)
+        await wait_msg.edit_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
 
     except ValueError as e:
-        logger.warning("Lookup failed for %s: %s", symbol, e)
+        logger.warning("Lookup failed %s: %s", symbol, e)
         await wait_msg.edit_text(f"❌ {e}")
 
     except Exception as e:
-        logger.error("Unexpected error for %s: %s", symbol, e, exc_info=True)
-        await wait_msg.edit_text("⚠️ Something went wrong. Please try again later.")
+        logger.error("Error for %s: %s", symbol, e, exc_info=True)
+        await wait_msg.edit_text("⚠️ Something went wrong. Check Console logs for details.")
+
+
+def _format_action_block(i: int, item: dict) -> str:
+    """Format one corporate action entry for the /upcoming list."""
+    ex_dt  = item["ex_date"].strftime("%d-%b-%Y")
+    rec_dt = item["record_date"].strftime("%d-%b-%Y") if item["record_date"] else "N/A"
+    header = f"{i}. *{item['company']}* ({item['symbol']})"
+
+    if item["type"] == "DIVIDEND":
+        amount = f"₹{item['amount']:.2f}/share" if item.get("amount") else item.get("subject", "N/A")
+        detail = f"   💰 Dividend: {amount}"
+
+    elif item["type"] == "BONUS":
+        ratio  = item.get("ratio") or "N/A"
+        detail = f"   🎁 Bonus Issue: {ratio}"
+
+    else:  # SPLIT
+        face   = item.get("face_change")
+        ratio  = item.get("ratio")
+        if face:
+            detail = f"   ✂️ Stock Split: {face}"
+        elif ratio:
+            detail = f"   ✂️ Stock Split: {ratio}"
+        else:
+            detail = f"   ✂️ Stock Split"
+
+    return (
+        f"{header}\n"
+        f"{detail}\n"
+        f"   📅 Ex-Date: {ex_dt}\n"
+        f"   📋 Record Date: {rec_dt}"
+    )
+
+
+async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("/upcoming requested")
+    wait_msg = await update.message.reply_text(
+        "📅 Fetching upcoming corporate actions from NSE..."
+    )
+
+    try:
+        items = get_upcoming_corporate_actions(days=30)
+
+        if not items:
+            await wait_msg.edit_text(
+                "ℹ️ No upcoming dividends, bonus issues, or stock splits found in the next 30 days."
+            )
+            return
+
+        # Count by type for the header
+        div_count    = sum(1 for a in items if a["type"] == "DIVIDEND")
+        bonus_count  = sum(1 for a in items if a["type"] == "BONUS")
+        split_count  = sum(1 for a in items if a["type"] == "SPLIT")
+        total        = len(items)
+
+        header_parts = []
+        if div_count:   header_parts.append(f"💰 {div_count} dividends")
+        if bonus_count: header_parts.append(f"🎁 {bonus_count} bonus")
+        if split_count: header_parts.append(f"✂️ {split_count} splits")
+
+        lines = [
+            f"📅 *Upcoming Corporate Actions — Next 30 Days*",
+            f"_{',  '.join(header_parts)}_\n",
+        ]
+
+        # Cap at 20 to stay within Telegram's 4096-char limit
+        for i, item in enumerate(items[:20], 1):
+            lines.append(_format_action_block(i, item))
+
+        if total > 20:
+            lines.append(f"\n_...and {total - 20} more._")
+
+        await wait_msg.edit_text("\n\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error("Error in /upcoming: %s", e, exc_info=True)
+        await wait_msg.edit_text("⚠️ Could not fetch upcoming actions. Please try again later.")
