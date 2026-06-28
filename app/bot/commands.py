@@ -21,3 +21,12 @@ Example:
 /dividend ITC
 """
     )
+
+
+async def dividend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Usage: /dividend <symbol>\nExample: /dividend ITC")
+        return
+
+    symbol = context.args[0].upper()
+    await update.message.reply_text(f"Fetching dividend info for {symbol}...")
