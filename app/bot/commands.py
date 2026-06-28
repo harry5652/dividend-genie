@@ -131,28 +131,35 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Count by type for the header
-        div_count    = sum(1 for a in items if a["type"] == "DIVIDEND")
-        bonus_count  = sum(1 for a in items if a["type"] == "BONUS")
-        split_count  = sum(1 for a in items if a["type"] == "SPLIT")
-        total        = len(items)
+        dividends = [a for a in items if a["type"] == "DIVIDEND"]
+        bonuses   = [a for a in items if a["type"] == "BONUS"]
+        splits    = [a for a in items if a["type"] == "SPLIT"]
 
-        header_parts = []
-        if div_count:   header_parts.append(f"💰 {div_count} dividends")
-        if bonus_count: header_parts.append(f"🎁 {bonus_count} bonus")
-        if split_count: header_parts.append(f"✂️ {split_count} splits")
+        lines = ["📅 *Upcoming Corporate Actions — Next 30 Days*\n"]
 
-        lines = [
-            f"📅 *Upcoming Corporate Actions — Next 30 Days*",
-            f"_{',  '.join(header_parts)}_\n",
-        ]
+        # ── Dividends ────────────────────────────────────────
+        if dividends:
+            lines.append(f"💰 *Dividends* ({len(dividends)})")
+            for i, item in enumerate(dividends[:10], 1):
+                lines.append(_format_action_block(i, item))
+            if len(dividends) > 10:
+                lines.append(f"_...and {len(dividends) - 10} more dividends._")
 
-        # Cap at 10
-        for i, item in enumerate(items[:10], 1):
-            lines.append(_format_action_block(i, item))
+        # ── Bonus Issues ─────────────────────────────────────
+        if bonuses:
+            lines.append(f"\n🎁 *Bonus Issues* ({len(bonuses)})")
+            for i, item in enumerate(bonuses[:10], 1):
+                lines.append(_format_action_block(i, item))
+            if len(bonuses) > 10:
+                lines.append(f"_...and {len(bonuses) - 10} more bonus issues._")
 
-        if total > 10:
-            lines.append(f"\n_...and {total - 10} more._")
+        # ── Stock Splits ──────────────────────────────────────
+        if splits:
+            lines.append(f"\n✂️ *Stock Splits* ({len(splits)})")
+            for i, item in enumerate(splits[:10], 1):
+                lines.append(_format_action_block(i, item))
+            if len(splits) > 10:
+                lines.append(f"_...and {len(splits) - 10} more splits._")
 
         await wait_msg.edit_text("\n\n".join(lines), parse_mode="Markdown")
 

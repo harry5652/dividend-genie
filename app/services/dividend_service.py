@@ -164,12 +164,14 @@ def format_dividend_message(data: dict) -> str:
         f"🏷 Current Price:     {price_s}",
     ]
 
-    # Estimated payout block
-    if data.get("estimated_payout") is not None:
+    # Estimated payout block — default to 100 shares if none specified
+    display_shares = data.get("shares") or 100
+    if data.get("dividend_amount"):
+        est = round(data["dividend_amount"] * display_shares, 2)
         lines += [
             "",
-            f"📦 *If you own {data['shares']:,} shares:*",
-            f"   Expected Dividend = {curr}{data['estimated_payout']:,.2f}",
+            f"📦 *If you own {display_shares:,} shares:*",
+            f"   Expected Dividend = {curr}{est:,.2f}",
         ]
 
     # Screener history (last 3 dividends)
