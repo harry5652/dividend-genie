@@ -8,7 +8,7 @@ from datetime import datetime, timezone, date as date_type
 
 import yfinance as yf
 
-from app.services.nse_service import get_nse_dividend_detail
+from app.services.nse_service import get_nse_dividend_detail, get_symbol_bonus_history, get_symbol_split_history
 from app.services.screener_service import (
     get_screener_url,
     get_stockedge_url,
@@ -97,13 +97,25 @@ def get_dividend_info(symbol: str, shares: int | None = None) -> dict:
 
     # Prefer NSE data; fall back to yfinance
     if nse:
-        ex_date = _fmt_date(nse["ex_date"]) if isinstance(nse.get("ex_date"), date_type) else yf_ex_date
+        ex_date     = _fmt_date(nse["ex_date"])     if isinstance(nse.get("ex_date"),     date_type) else yf_ex_date
         record_date = _fmt_date(nse["record_date"]) if isinstance(nse.get("record_date"), date_type) else None
+        payout_date = _fmt_date(nse["payout_date"]) if isinstance(nse.get("payout_date"), date_type) else None
         dividend_amount = nse.get("amount") or yf_rate
     else:
         ex_date         = yf_ex_date
         record_date     = None
+        payout_date     = None
         dividend_amount = yf_rate
+
+    # Last payout date from yfinance dividend history
+    last_payout_date = None
+    try:
+        hist = yf.Ticker(resolved).dividends
+        if not hist.empty:
+            last_ts = hist.index[-1]
+            last_payout_date = last_ts.strftime("%d %b %Y")
+    except Exception as e:
+        logger.debug("Could not fetch dividend history for %s: %s", resolved, e)
 
     # 3. Dividend yield — calculate from amount/price to avoid yfinance inconsistency
     if dividend_amount and price:
@@ -134,6 +146,8 @@ def get_dividend_info(symbol: str, shares: int | None = None) -> dict:
         "dividend_yield":   dividend_yield,
         "ex_dividend_date": ex_date,
         "record_date":      record_date,
+        "payout_date":      payout_date,
+        "last_payout_date": last_payout_date,
         "payout_ratio":     payout_ratio,
         "screener_history": screener_history,
         "estimated_payout": estimated_payout,
@@ -152,6 +166,9 @@ def format_dividend_message(data: dict) -> str:
     payout  = f"{data['payout_ratio'] * 100:.1f}%" if data["payout_ratio"] else "N/A"
     price_s = f"{curr}{data['price']:.2f}" if data["price"] else "N/A"
 
+    pay_date  = data.get("payout_date")      or "N/A"
+    last_pay  = data.get("last_payout_date") or "N/A"
+
     lines = [
         f"📊 *{data['company']}* (`{data['symbol']}`)",
         f"🏛 {data['exchange']}  |  🏭 {data['sector']}",
@@ -160,6 +177,8 @@ def format_dividend_message(data: dict) -> str:
         f"📈 Dividend Yield:    {yield_s}",
         f"📅 Ex-Dividend Date:  {ex_date}",
         f"📋 Record Date:       {rec}",
+        f"💸 Payout Date:       {pay_date}",
+        f"🕐 Last Payout Date:  {last_pay}",
         f"💼 Payout Ratio:      {payout}",
         f"🏷 Current Price:     {price_s}",
     ]

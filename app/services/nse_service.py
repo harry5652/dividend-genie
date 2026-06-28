@@ -168,10 +168,92 @@ def get_upcoming_dividends(days: int = 30) -> list[dict]:
     ]
 
 
+def _fetch_actions_range(from_date: date, to_date: date) -> list[dict]:
+    """Fetch corporate actions for a specific date range."""
+    session = _get_session()
+    fmt = "%d-%m-%Y"
+    url = (
+        f"{NSE_BASE}/api/corporates-corporateActions?index=equities"
+        f"&from_date={from_date.strftime(fmt)}&to_date={to_date.strftime(fmt)}"
+    )
+    try:
+        resp = session.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.error("NSE ranged fetch failed (%s→%s): %s", from_date, to_date, e)
+        return []
+
+
+def _symbol_history(symbol: str, action_type: str, years: int = 10) -> list[dict]:
+    """Return historical corporate actions of a given type for a symbol."""
+    bare  = symbol.upper().replace(".NS", "").replace(".BO", "").strip()
+    today = datetime.now().date()
+    start = today.replace(year=today.year - years)
+
+    # NSE API caps single ranges; chunk by year
+    all_actions: list[dict] = []
+    chunk_start = start
+    while chunk_start < today:
+        chunk_end = min(chunk_start.replace(year=chunk_start.year + 1), today)
+        all_actions += _fetch_actions_range(chunk_start, chunk_end)
+        chunk_start = chunk_end
+
+    results = []
+    for item in all_actions:
+        if item.get("symbol", "").upper() != bare:
+            continue
+        subject = item.get("subject") or ""
+        if _detect_type(subject) != action_type:
+            continue
+
+        ex_date     = _parse_date(item.get("exDate") or "")
+        record_date = _parse_date(item.get("recDate") or "")
+        payout_date = _parse_date(item.get("setPayDt") or "")
+
+        entry = {
+            "symbol":      bare,
+            "company":     item.get("comp", ""),
+            "ex_date":     ex_date,
+            "record_date": record_date,
+            "payout_date": payout_date,
+            "subject":     subject,
+        }
+        if action_type == "BONUS":
+            entry["ratio"] = _parse_ratio(subject)
+        elif action_type == "SPLIT":
+            entry["ratio"]       = _parse_ratio(subject)
+            entry["face_change"] = _parse_split_faces(subject)
+        elif action_type == "DIVIDEND":
+            entry["amount"] = _parse_amount(subject)
+
+        results.append(entry)
+
+    # Deduplicate by ex_date + subject
+    seen = set()
+    unique = []
+    for r in results:
+        key = (r.get("ex_date"), r["subject"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+
+    return sorted(unique, key=lambda x: x["ex_date"] or date.min, reverse=True)
+
+
+def get_symbol_bonus_history(symbol: str) -> list[dict]:
+    return _symbol_history(symbol, "BONUS")
+
+
+def get_symbol_split_history(symbol: str) -> list[dict]:
+    return _symbol_history(symbol, "SPLIT")
+
+
 def get_nse_dividend_detail(symbol: str) -> dict | None:
     """
     Return the most relevant (upcoming or latest past) dividend detail for `symbol`.
-    Returns dict with ex_date, record_date, amount; or None if not found.
+    Returns dict with ex_date, record_date, payout_date, amount; or None if not found.
     """
     bare = symbol.upper().replace(".NS", "").replace(".BO", "").strip()
     actions = _fetch_actions()
@@ -200,6 +282,7 @@ def get_nse_dividend_detail(symbol: str) -> dict | None:
     return {
         "ex_date":     chosen_date,
         "record_date": _parse_date(chosen.get("recDate") or ""),
+        "payout_date": _parse_date(chosen.get("setPayDt") or ""),
         "amount":      _parse_amount(chosen.get("subject") or ""),
         "subject":     chosen.get("subject", ""),
     }

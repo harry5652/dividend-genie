@@ -5,7 +5,11 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.services.dividend_service import get_dividend_info, format_dividend_message
-from app.services.nse_service import get_upcoming_corporate_actions
+from app.services.nse_service import (
+    get_upcoming_corporate_actions,
+    get_symbol_bonus_history,
+    get_symbol_split_history,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +120,80 @@ def _format_action_block(i: int, item: dict) -> str:
     )
 
 
+async def bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /bonus <symbol>\nExample: /bonus INFY"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    logger.info("Bonus history requested: %s", symbol)
+    wait_msg = await update.message.reply_text(f"🎁 Fetching bonus history for *{symbol}*...", parse_mode="Markdown")
+
+    try:
+        items = get_symbol_bonus_history(symbol)
+
+        if not items:
+            await wait_msg.edit_text(f"ℹ️ No bonus issue history found for *{symbol}*.", parse_mode="Markdown")
+            return
+
+        lines = [f"🎁 *Bonus Issue History — {symbol}* ({len(items)} records)\n"]
+        for i, item in enumerate(items[:10], 1):
+            ex_dt  = item["ex_date"].strftime("%d-%b-%Y")  if item.get("ex_date")     else "N/A"
+            rec_dt = item["record_date"].strftime("%d-%b-%Y") if item.get("record_date") else "N/A"
+            ratio  = item.get("ratio") or "N/A"
+            lines.append(
+                f"{i}. 🎁 Bonus: *{ratio}*\n"
+                f"   📅 Ex-Date: {ex_dt}\n"
+                f"   📋 Record Date: {rec_dt}"
+            )
+
+        await wait_msg.edit_text("\n\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error("Error in /bonus for %s: %s", symbol, e, exc_info=True)
+        await wait_msg.edit_text("⚠️ Could not fetch bonus history. Please try again later.")
+
+
+async def split(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /split <symbol>\nExample: /split TCS"
+        )
+        return
+
+    symbol = context.args[0].upper()
+    logger.info("Split history requested: %s", symbol)
+    wait_msg = await update.message.reply_text(f"✂️ Fetching split history for *{symbol}*...", parse_mode="Markdown")
+
+    try:
+        items = get_symbol_split_history(symbol)
+
+        if not items:
+            await wait_msg.edit_text(f"ℹ️ No stock split history found for *{symbol}*.", parse_mode="Markdown")
+            return
+
+        lines = [f"✂️ *Stock Split History — {symbol}* ({len(items)} records)\n"]
+        for i, item in enumerate(items[:10], 1):
+            ex_dt  = item["ex_date"].strftime("%d-%b-%Y")    if item.get("ex_date")     else "N/A"
+            rec_dt = item["record_date"].strftime("%d-%b-%Y") if item.get("record_date") else "N/A"
+            face   = item.get("face_change")
+            ratio  = item.get("ratio")
+            detail = face or (f"Ratio {ratio}" if ratio else item.get("subject", "N/A"))
+            lines.append(
+                f"{i}. ✂️ Split: *{detail}*\n"
+                f"   📅 Ex-Date: {ex_dt}\n"
+                f"   📋 Record Date: {rec_dt}"
+            )
+
+        await wait_msg.edit_text("\n\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error("Error in /split for %s: %s", symbol, e, exc_info=True)
+        await wait_msg.edit_text("⚠️ Could not fetch split history. Please try again later.")
+
+
 async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("/upcoming requested")
     wait_msg = await update.message.reply_text(
@@ -148,18 +226,18 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ── Bonus Issues ─────────────────────────────────────
         if bonuses:
             lines.append(f"\n🎁 *Bonus Issues* ({len(bonuses)})")
-            for i, item in enumerate(bonuses[:5], 1):
+            for i, item in enumerate(bonuses[:10], 1):
                 lines.append(_format_action_block(i, item))
-            if len(bonuses) > 5:
-                lines.append(f"_...and {len(bonuses) - 5} more bonus issues._")
+            if len(bonuses) > 10:
+                lines.append(f"_...and {len(bonuses) - 10} more bonus issues._")
 
         # ── Stock Splits ──────────────────────────────────────
         if splits:
             lines.append(f"\n✂️ *Stock Splits* ({len(splits)})")
-            for i, item in enumerate(splits[:5], 1):
+            for i, item in enumerate(splits[:10], 1):
                 lines.append(_format_action_block(i, item))
-            if len(splits) > 5:
-                lines.append(f"_...and {len(splits) - 5} more splits._")
+            if len(splits) > 10:
+                lines.append(f"_...and {len(splits) - 10} more splits._")
 
         await wait_msg.edit_text("\n\n".join(lines), parse_mode="Markdown")
 
