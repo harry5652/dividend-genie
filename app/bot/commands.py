@@ -147,12 +147,12 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"_{',  '.join(header_parts)}_\n",
         ]
 
-        # Cap at 20 to stay within Telegram's 4096-char limit
-        for i, item in enumerate(items[:20], 1):
+        # Cap at 10
+        for i, item in enumerate(items[:10], 1):
             lines.append(_format_action_block(i, item))
 
-        if total > 20:
-            lines.append(f"\n_...and {total - 20} more._")
+        if total > 10:
+            lines.append(f"\n_...and {total - 10} more._")
 
         await wait_msg.edit_text("\n\n".join(lines), parse_mode="Markdown")
 
