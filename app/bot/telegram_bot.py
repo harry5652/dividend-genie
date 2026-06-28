@@ -1,7 +1,7 @@
-from telegram.ext import ApplicationBuilder, CommandHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 
 from app.config import config
-from app.bot.commands import start, help_command, dividend, upcoming, bonus, split
+from app.bot.commands import start, help_command, dividend, upcoming, upcoming_page_callback, bonus, split
 
 
 def create_bot():
@@ -13,5 +13,8 @@ def create_bot():
     app.add_handler(CommandHandler("upcoming", upcoming))
     app.add_handler(CommandHandler("bonus",    bonus))
     app.add_handler(CommandHandler("split",    split))
+
+    # Pagination buttons for /upcoming
+    app.add_handler(CallbackQueryHandler(upcoming_page_callback, pattern=r"^up\|"))
 
     return app

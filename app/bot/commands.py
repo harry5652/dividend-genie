@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from app.services.dividend_service import get_dividend_info, format_dividend_message
@@ -194,6 +194,75 @@ async def split(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text("⚠️ Could not fetch split history. Please try again later.")
 
 
+PAGE_SIZE = 5
+
+# ── Pagination helpers ────────────────────────────────────────────────────────
+
+_TYPE_META = {
+    "div":   ("DIVIDEND", "💰 Dividends"),
+    "bonus": ("BONUS",    "🎁 Bonus Issues"),
+    "split": ("SPLIT",    "✂️ Stock Splits"),
+}
+
+
+def _category_keyboard(cat: str, page: int, total: int) -> InlineKeyboardMarkup:
+    """Build Prev / Next inline buttons for a paginated category view."""
+    buttons: list[InlineKeyboardButton] = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"up|{cat}|{page - 1}"))
+    if (page + 1) * PAGE_SIZE < total:
+        buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"up|{cat}|{page + 1}"))
+    return InlineKeyboardMarkup([buttons]) if buttons else InlineKeyboardMarkup([])
+
+
+def _build_category_page(items: list[dict], cat: str, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Return (text, keyboard) for a single paginated category page."""
+    _, label = _TYPE_META[cat]
+    total    = len(items)
+    start    = page * PAGE_SIZE
+    chunk    = items[start: start + PAGE_SIZE]
+    last     = min(start + PAGE_SIZE, total)
+
+    lines = [f"{label} — Page {page + 1}  ({start + 1}–{last} of {total})\n"]
+    for i, item in enumerate(chunk, start + 1):
+        lines.append(_format_action_block(i, item))
+
+    return "\n\n".join(lines), _category_keyboard(cat, page, total)
+
+
+def _main_upcoming_message(
+    dividends: list, bonuses: list, splits: list
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the initial /upcoming message with first 5 per category + More buttons."""
+    lines   = ["📅 *Upcoming Corporate Actions — Next 30 Days*\n"]
+    buttons = []
+
+    for cat, items, label in [
+        ("div",   dividends, "💰 Dividends"),
+        ("bonus", bonuses,   "🎁 Bonus Issues"),
+        ("split", splits,    "✂️ Stock Splits"),
+    ]:
+        if not items:
+            continue
+        lines.append(f"{label} ({len(items)})")
+        for i, item in enumerate(items[:PAGE_SIZE], 1):
+            lines.append(_format_action_block(i, item))
+        if len(items) > PAGE_SIZE:
+            remaining = len(items) - PAGE_SIZE
+            buttons.append(
+                InlineKeyboardButton(
+                    f"➡️ More {label} ({remaining} more)",
+                    callback_data=f"up|{cat}|1",
+                )
+            )
+        lines.append("")  # spacer
+
+    keyboard = InlineKeyboardMarkup([[b] for b in buttons])
+    return "\n\n".join(lines).strip(), keyboard
+
+
+# ── /upcoming command ─────────────────────────────────────────────────────────
+
 async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("/upcoming requested")
     wait_msg = await update.message.reply_text(
@@ -213,34 +282,44 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bonuses   = [a for a in items if a["type"] == "BONUS"]
         splits    = [a for a in items if a["type"] == "SPLIT"]
 
-        lines = ["📅 *Upcoming Corporate Actions — Next 30 Days*\n"]
-
-        # ── Dividends ────────────────────────────────────────
-        if dividends:
-            lines.append(f"💰 *Dividends* ({len(dividends)})")
-            for i, item in enumerate(dividends[:5], 1):
-                lines.append(_format_action_block(i, item))
-            if len(dividends) > 5:
-                lines.append(f"_...and {len(dividends) - 5} more dividends._")
-
-        # ── Bonus Issues ─────────────────────────────────────
-        if bonuses:
-            lines.append(f"\n🎁 *Bonus Issues* ({len(bonuses)})")
-            for i, item in enumerate(bonuses[:10], 1):
-                lines.append(_format_action_block(i, item))
-            if len(bonuses) > 10:
-                lines.append(f"_...and {len(bonuses) - 10} more bonus issues._")
-
-        # ── Stock Splits ──────────────────────────────────────
-        if splits:
-            lines.append(f"\n✂️ *Stock Splits* ({len(splits)})")
-            for i, item in enumerate(splits[:10], 1):
-                lines.append(_format_action_block(i, item))
-            if len(splits) > 10:
-                lines.append(f"_...and {len(splits) - 10} more splits._")
-
-        await wait_msg.edit_text("\n\n".join(lines), parse_mode="Markdown")
+        text, keyboard = _main_upcoming_message(dividends, bonuses, splits)
+        await wait_msg.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
     except Exception as e:
         logger.error("Error in /upcoming: %s", e, exc_info=True)
         await wait_msg.edit_text("⚠️ Could not fetch upcoming actions. Please try again later.")
+
+
+# ── Pagination callback ───────────────────────────────────────────────────────
+
+async def upcoming_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle ⬅️ Prev / Next ➡️ button presses for /upcoming pagination."""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        _, cat, page_str = query.data.split("|")
+        page = int(page_str)
+        action_type, _ = _TYPE_META[cat]
+    except (ValueError, KeyError):
+        await query.answer("Invalid pagination data.", show_alert=True)
+        return
+
+    try:
+        all_items = get_upcoming_corporate_actions(days=30)
+        items = [a for a in all_items if a["type"] == "DIVIDEND"] if cat == "div" \
+            else [a for a in all_items if a["type"] == "BONUS"]   if cat == "bonus" \
+            else [a for a in all_items if a["type"] == "SPLIT"]
+
+        if not items:
+            await query.edit_message_text("ℹ️ No items found.")
+            return
+
+        # Clamp page to valid range
+        page = max(0, min(page, (len(items) - 1) // PAGE_SIZE))
+        text, keyboard = _build_category_page(items, cat, page)
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    except Exception as e:
+        logger.error("Pagination callback error: %s", e, exc_info=True)
+        await query.answer("⚠️ Could not load page. Please try again.", show_alert=True)
