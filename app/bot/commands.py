@@ -140,26 +140,26 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ── Dividends ────────────────────────────────────────
         if dividends:
             lines.append(f"💰 *Dividends* ({len(dividends)})")
-            for i, item in enumerate(dividends[:10], 1):
+            for i, item in enumerate(dividends[:5], 1):
                 lines.append(_format_action_block(i, item))
-            if len(dividends) > 10:
-                lines.append(f"_...and {len(dividends) - 10} more dividends._")
+            if len(dividends) > 5:
+                lines.append(f"_...and {len(dividends) - 5} more dividends._")
 
         # ── Bonus Issues ─────────────────────────────────────
         if bonuses:
             lines.append(f"\n🎁 *Bonus Issues* ({len(bonuses)})")
-            for i, item in enumerate(bonuses[:10], 1):
+            for i, item in enumerate(bonuses[:5], 1):
                 lines.append(_format_action_block(i, item))
-            if len(bonuses) > 10:
-                lines.append(f"_...and {len(bonuses) - 10} more bonus issues._")
+            if len(bonuses) > 5:
+                lines.append(f"_...and {len(bonuses) - 5} more bonus issues._")
 
         # ── Stock Splits ──────────────────────────────────────
         if splits:
             lines.append(f"\n✂️ *Stock Splits* ({len(splits)})")
-            for i, item in enumerate(splits[:10], 1):
+            for i, item in enumerate(splits[:5], 1):
                 lines.append(_format_action_block(i, item))
-            if len(splits) > 10:
-                lines.append(f"_...and {len(splits) - 10} more splits._")
+            if len(splits) > 5:
+                lines.append(f"_...and {len(splits) - 5} more splits._")
 
         await wait_msg.edit_text("\n\n".join(lines), parse_mode="Markdown")
 
