@@ -1,18 +1,7 @@
-"""
-Entry point for the Dividend Genie application.
-"""
-from app.config import config
+from app.bot.telegram_bot import create_bot
 
+bot = create_bot()
 
-def main() -> None:
-    # Validate configuration before doing anything else.
-    # Raises ValueError with a descriptive message on misconfiguration.
-    config.validate()
+print("🚀 Dividend Genie is running...")
 
-    print(f"Starting Dividend Genie [{config.APP_ENV}]...")
-    # TODO: initialise database, start bot, wire up services
-    print("Dividend Genie is running.")
-
-
-if __name__ == "__main__":
-    main()
+bot.run_polling()
