@@ -10,13 +10,15 @@ from app.services.nse_service import (
     get_symbol_bonus_history,
     get_symbol_split_history,
 )
+from app.services.tracker_service import track, get_stats
 
 logger = logging.getLogger(__name__)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user.first_name
-    logger.info("/start from %s", user)
+    tg_user = update.effective_user
+    track(tg_user, "start")
+    logger.info("/start from %s", tg_user.first_name)
     await update.message.reply_text(
         f"👋 Welcome to Dividend Genie, {user}!\n\n"
         "Your assistant for NSE, BSE & global dividend stocks.\n\n"
@@ -29,6 +31,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    track(update.effective_user, "help")
     logger.info("/help requested")
     await update.message.reply_text(
         "📖 *Available Commands*\n\n"
@@ -69,6 +72,7 @@ async def dividend(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Shares must be a positive number. E.g. /dividend ITC 100")
             return
 
+    track(update.effective_user, "dividend", " ".join(context.args))
     logger.info("Dividend lookup: symbol=%s shares=%s", symbol, shares)
     wait_msg = await update.message.reply_text(
         f"🔍 Looking up *{symbol}*...", parse_mode="Markdown"
@@ -128,6 +132,7 @@ async def bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     symbol = context.args[0].upper()
+    track(update.effective_user, "bonus", symbol)
     logger.info("Bonus history requested: %s", symbol)
     wait_msg = await update.message.reply_text(f"🎁 Fetching bonus history for *{symbol}*...", parse_mode="Markdown")
 
@@ -164,6 +169,7 @@ async def split(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     symbol = context.args[0].upper()
+    track(update.effective_user, "split", symbol)
     logger.info("Split history requested: %s", symbol)
     wait_msg = await update.message.reply_text(f"✂️ Fetching split history for *{symbol}*...", parse_mode="Markdown")
 
@@ -264,6 +270,7 @@ def _main_upcoming_message(
 # ── /upcoming command ─────────────────────────────────────────────────────────
 
 async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    track(update.effective_user, "upcoming")
     logger.info("/upcoming requested")
     wait_msg = await update.message.reply_text(
         "📅 Fetching upcoming corporate actions from NSE..."
@@ -291,6 +298,45 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── Pagination callback ───────────────────────────────────────────────────────
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    track(update.effective_user, "stats")
+    logger.info("/stats requested")
+    wait_msg = await update.message.reply_text("📊 Fetching usage stats...")
+
+    try:
+        s = get_stats()
+        if not s:
+            await wait_msg.edit_text("⚠️ Could not load stats right now.")
+            return
+
+        top_cmds = "\n".join(
+            f"   {i+1}. /{r['command']} — {r['count']} times"
+            for i, r in enumerate(s.get("top_commands", []))
+        ) or "   No data yet"
+
+        top_users = "\n".join(
+            f"   {i+1}. {r['name']}" + (f" (@{r['username']})" if r['username'] else "") +
+            f" — {r['commands']} commands"
+            for i, r in enumerate(s.get("top_users", []))
+        ) or "   No data yet"
+
+        msg = (
+            "📊 *Dividend Genie — Usage Stats*\n\n"
+            f"👥 Total Users:       {s['total_users']:,}\n"
+            f"🟢 Active Today:      {s['active_today']:,}\n"
+            f"📅 Active This Week:  {s['active_week']:,}\n"
+            f"🗓 Active This Month: {s['active_month']:,}\n"
+            f"⚡ Total Commands:   {s['total_commands']:,}\n\n"
+            f"🏆 *Top Commands:*\n{top_cmds}\n\n"
+            f"🥇 *Most Active Users:*\n{top_users}"
+        )
+        await wait_msg.edit_text(msg, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error("Error in /stats: %s", e, exc_info=True)
+        await wait_msg.edit_text("⚠️ Could not fetch stats. Please try again later.")
+
 
 async def upcoming_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle ⬅️ Prev / Next ➡️ button presses for /upcoming pagination."""
