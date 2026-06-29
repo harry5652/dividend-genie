@@ -2,11 +2,33 @@
 Application configuration.
 Loads settings from environment variables / .env file.
 """
+import logging
 import os
-import sys
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_admin_id() -> int:
+    """
+    Parse ADMIN_TELEGRAM_ID from the environment.
+    Accepts a plain integer string ("123456789").
+    Returns 0 (admin disabled) if the value is missing or non-numeric.
+    """
+    raw = os.getenv("ADMIN_TELEGRAM_ID", "").strip().lstrip("@")
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "ADMIN_TELEGRAM_ID=%r is not a numeric Telegram user ID — "
+            "admin access disabled. Set it to your numeric ID (e.g. 123456789).",
+            raw,
+        )
+        return 0
 
 
 class Config:
@@ -21,6 +43,7 @@ class Config:
         )
         self.ALPHA_VANTAGE_API_KEY: str = os.getenv("ALPHA_VANTAGE_API_KEY", "")
         self.SESSION_SECRET: str = os.getenv("SESSION_SECRET", "")
+        self.ADMIN_TELEGRAM_ID: int = _parse_admin_id()
 
     def validate(self) -> None:
         errors: list[str] = []

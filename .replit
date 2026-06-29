@@ -27,3 +27,8 @@ args = "source .venv/bin/activate && python -m app.main"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[userenv]
+
+[userenv.shared]
+ADMIN_TELEGRAM_ID = "@harry5652"

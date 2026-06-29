@@ -300,8 +300,12 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Pagination callback ───────────────────────────────────────────────────────
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from app.config import config
+    if update.effective_user.id != config.ADMIN_TELEGRAM_ID:
+        await update.message.reply_text("⛔ This command is restricted to the admin.")
+        return
     track(update.effective_user, "stats")
-    logger.info("/stats requested")
+    logger.info("/stats requested by admin")
     wait_msg = await update.message.reply_text("📊 Fetching usage stats...")
 
     try:
