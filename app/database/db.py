@@ -62,6 +62,13 @@ def init_db() -> None:
     _migrate()
 
 
+def init_db():
+
+from app.models import user
+from app.models import portfolio
+
+Base.metadata.create_all(bind=engine)
+
 def get_db():
     """Context-manager style session. Use with `with get_db() as db:`."""
     db = SessionLocal()

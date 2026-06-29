@@ -20,7 +20,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track(tg_user, "start")
     logger.info("/start from %s", tg_user.first_name)
     await update.message.reply_text(
-        f"👋 Welcome to Dividend Genie, {user}!\n\n"
+        f"👋 Welcome to Dividend Genie, {tg_user.first_name}!\n\n"
         "Your assistant for NSE, BSE & global dividend stocks.\n\n"
         "Commands:\n"
         "  /dividend ITC — dividend info\n"
