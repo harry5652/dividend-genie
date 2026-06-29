@@ -126,6 +126,6 @@ def get_stats() -> dict:
                 for r in top_users
             ],
         }
-    except Exception as e:
-        logger.error("tracker.get_stats failed: %s", e, exc_info=True)
+    except Exception:
+    logger.exception("tracker.track failed")
         return {}
