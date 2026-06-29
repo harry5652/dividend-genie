@@ -25,6 +25,7 @@ _file = logging.handlers.RotatingFileHandler(
 _file.setFormatter(_fmt)
 
 logging.basicConfig(level=logging.INFO, handlers=[_console, _file])
+
 logger = logging.getLogger(__name__)
 
 # ── Startup ───────────────────────────────────────────────────────────────────

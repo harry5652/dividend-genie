@@ -27,10 +27,17 @@ def _session():
         db.close()
 
 
-def track(tg_user, command: str, args: str | None = None) -> None:
+def track(
+    tg_user,
+    command: str,
+    args: str | None = None,
+    response_time_ms: int | None = None,
+    success: bool | None = None,
+) -> None:
     """
     Upsert the Telegram user and append a CommandLog row.
     Call this at the top of every command handler.
+    Optionally pass response_time_ms and success after the command completes.
     """
     try:
         with _session() as db:
@@ -64,6 +71,8 @@ def track(tg_user, command: str, args: str | None = None) -> None:
                 user_id=user.id,
                 command=command,
                 args=args[:256] if args else None,
+                response_time_ms=response_time_ms,
+                success=success,
             ))
     except Exception as e:
         logger.error("tracker.track failed: %s", e, exc_info=True)
